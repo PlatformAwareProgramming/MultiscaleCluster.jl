@@ -75,7 +75,7 @@ function _require_callback(mod::Base.PkgId)
     if Base.toplevel_load[] && nprocs(role=:manager) > 1
         # broadcast top-level (e.g. from Main) import/using from node 1 (only)
         @sync for p in procs(role = :manager)
-            @info "require callback", p
+            #@info "require callback", p
             p == 1 && continue
             # Extensions are already loaded on workers by their triggers being loaded
             # so no need to fire the callback upon extension being loaded on master.

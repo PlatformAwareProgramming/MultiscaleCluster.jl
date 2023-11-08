@@ -111,7 +111,7 @@ function finalize_ref(r::AbstractRemoteRef, role)
             finalizer(r -> finalize_ref(r, role), r)
             return nothing
         end
-    end
+    end 
     nothing
 end
 
@@ -121,11 +121,11 @@ end
 Create a `Future` on process `pid`.
 The default `pid` is the current process.
 """
-Future(pid::Integer=0; role =:default) = Future(pid == 0 ? myid(role = role) : pid, RRID(role = role); role = role)
-Future(w::LocalProcess; role =:default) = Future(w.id; role = role)
-Future(w::Worker; role =:default) = Future(w.id; role = role)
+Future(pid::Integer=-1; role =:default) = Future(pid < 0 ? myid(role = role) : pid, RRID(role = role); role = role)
+Future(w::LocalProcess; role =:default) = Future(wid(w,role=role); role = role)
+Future(w::Worker; role =:default) = Future(wid(w,role=role); role = role)
 
-RemoteChannel(pid::Integer=0; role= :default) = RemoteChannel{Channel{Any}}(pid == 0 ? myid(role = role) : pid, RRID(role = role); role = role)
+RemoteChannel(pid::Integer=-1; role= :default) = RemoteChannel{Channel{Any}}(pid < 0 ? myid(role = role) : pid, RRID(role = role); role = role)
 
 function RemoteChannel(f::Function, pid_::Integer=0; role= :default)
     pid = pid_ == 0 ? myid(role = role) : pid_
@@ -218,7 +218,7 @@ function isready(rr::Future; role= :default)
     return if rr.where == myid(role = role)
         isready(lookup_ref(rid; role = role).c)
     else
-        remotecall_fetch(rid->isready(lookup_ref(rid; role = rr.where == 1 ? :manager : :worker).c), rr.where, rid; role = role)
+        remotecall_fetch((rid, role)->isready(lookup_ref(rid; role = role).c), rr.where, rid, rr.where == 1 ? :manager : :worker; role = role)
     end
 end
 
@@ -284,7 +284,7 @@ function start_gc_msgs_task(; role= :default)
                 # Use invokelatest() so that custom message transport streams
                 # for workers can be defined in a newer world age than the Task
                 # which runs the loop here.
-                invokelatest(flush_gc_msgs; role = role) # handles throws internally
+                invokelatest(flush_gc_msgs#=; role = role=#) # handles throws internally
             end
         end
     )
@@ -446,7 +446,8 @@ Return a [`Future`](@ref).
 Keyword arguments, if any, are passed through to `f`.
 """
 remotecall(f, id::Integer, args...; role= :default, kwargs...) = 
-            remotecall(f, worker_from_id(id; role = id == 1 ? :manager : :worker), args...; role = role, kwargs...)
+#            remotecall(f, worker_from_id(id; role = id == 1 ? :manager : :worker), args...; role = role, kwargs...)
+            remotecall(f, worker_from_id(id; role = role), args...; role = role, kwargs...)
 
 function remotecall_fetch(f, w::LocalProcess, args...; role= :default, kwargs...)
     v=run_work_thunk(local_remotecall_thunk(f,args, kwargs), false; role = role)
@@ -458,7 +459,7 @@ function remotecall_fetch(f, w::Worker, args...; role= :default, kwargs...)
     # itself, it only gets the result.
     oid = RRID(role = role)
     rv = lookup_ref(oid; role = role)
-    rv.waitingfor = w.id
+    rv.waitingfor = wid(w, role=role)
     send_msg(w, MsgHeader(RRID(0,0), oid), CallMsg{:call_fetch}(f, args, kwargs); role = role)
     v = take!(rv)
     lock(client_refs) do
@@ -499,7 +500,7 @@ remotecall_wait(f, w::LocalProcess, args...; role= :default, kwargs...) = wait(r
 function remotecall_wait(f, w::Worker, args...; role= :default, kwargs...)
     prid = RRID(role = role)
     rv = lookup_ref(prid; role = role)
-    rv.waitingfor = w.id
+    rv.waitingfor = wid(w,role=role)
     rr = Future(w; role = role)
     send_msg(w, MsgHeader(remoteref_id(rr), prid), CallWaitMsg(f, args, kwargs); role = role)
     v = fetch(rv.c)
@@ -521,7 +522,7 @@ See also [`wait`](@ref) and [`remotecall`](@ref).
 remotecall_wait(f, id::Integer, args...; role= :default, kwargs...) =
     remotecall_wait(f, worker_from_id(id; role = role), args...; kwargs...)
 
-function remote_do(f, w::LocalProcess, args...; kwargs...)
+function remote_do(f, w::LocalProcess, args...; role = :default, kwargs...)
     # the LocalProcess version just performs in local memory what a worker
     # does when it gets a :do message.
     # same for other messages on LocalProcess.
@@ -531,7 +532,7 @@ function remote_do(f, w::LocalProcess, args...; kwargs...)
 end
 
 function remote_do(f, w::Worker, args...; role= :default, kwargs...)
-    send_msg(w, MsgHeader(), RemoteDoMsg(f, args, kwargs); role = role)
+    send_msg(w, MsgHeader(), RemoteDoMsg(f, args, kwargs), role = role)
     nothing
 end
 
@@ -556,7 +557,7 @@ Any exceptions thrown by `f` are printed to [`stderr`](@ref) on the remote worke
 
 Keyword arguments, if any, are passed through to `f`.
 """
-remote_do(f, id::Integer, args...; role=:default, kwargs...) = remote_do(f, worker_from_id(id; role = role), args...; role = role, kwargs...) # TO CHECK (e se f não tiver role parameter ?)
+remote_do(f, id::Integer, args...; role=:default, kwargs...) = remote_do(f, worker_from_id(id, role = role), role = role,  args...; kwargs...) # TO CHECK (e se f não tiver role parameter ?)
 
 # have the owner of rr call f on it
 function call_on_owner(f, rr::AbstractRemoteRef, args...; role= :default)
@@ -564,7 +565,14 @@ function call_on_owner(f, rr::AbstractRemoteRef, args...; role= :default)
     if rr.where == myid(role = role)
         f(rid, args...)
     else
-        remotecall_fetch(rid -> f(rid, role = rr.where=1 ? :manager : :worker, args...), rr.where; role = role)
+        #remotecall_fetch((rid,role) -> f(rid, role = role, args...), rr.where, rid, rr.where==1 ? :manager : :worker; role = role)
+        remotecall_fetch((rid,role) -> f(rid, args...; role=role), rr.where, rid, rr.where==1 ? :manager : :worker; role = role)
+
+
+        #remotecall_fetch(rid -> f(rid, role = rr.where==1 ? :manager : :worker, args...), rr.where; role = role)
+        #remotecall_fetch(iiiii, rr.where, f, rid, rr.where==1 ? :manager : :worker, args...; role = role)
+#        remotecall_fetch(f, rr.where, rid, args...)
+
     end
 end
 
@@ -585,7 +593,10 @@ end
 
 Wait for a value to become available for the specified [`Future`](@ref).
 """
-wait(r::Future; role= :default) = (v_cache = @atomic r.v; v_cache !== nothing && return r; call_on_owner(wait_ref, r, myid(role = role); role = role); r)
+wait(r::Future; role= :default) = (v_cache = @atomic r.v; v_cache !== nothing && return r; 
+                                   call_on_owner(wait_ref, r, myid(role = role); role = role); 
+                                   #call_on_owner((rid, caller, args...; role=role) -> wait_ref(rid, caller, args...; role=role), r, myid(role = role); role = role);
+                                   r)
 
 """
     wait(r::RemoteChannel, args...)
@@ -593,6 +604,9 @@ wait(r::Future; role= :default) = (v_cache = @atomic r.v; v_cache !== nothing &&
 Wait for a value to become available on the specified [`RemoteChannel`](@ref).
 """
 wait(r::RemoteChannel, args...; role= :default) = (call_on_owner(wait_ref, r, myid(role = role), args...; role = role); r)
+#wait(r::RemoteChannel, args...; role= :default) = (call_on_owner((rid, caller, args...; role=role) -> wait_ref(rid, caller, args...; role=role), r, myid(role = role), args...; role = role); r)
+
+
 
 """
     fetch(x::Future)
@@ -618,6 +632,7 @@ function fetch(r::Future; role= :default)
             v_local = fetch(rv.c)
         end
     else
+        #v_local = call_on_owner((rid, args...; role=role) -> fetch_ref(rid, args...;role=role), r; role = role)
         v_local = call_on_owner(fetch_ref, r; role = role)
     end
 
@@ -647,7 +662,9 @@ function fetch(r::Future; role= :default)
     something(v_cache)
 end
 
-fetch_ref(rid, args...; role=:default) = fetch(lookup_ref(rid; role = role).c, args...)
+fetch_ref(rid, args...; role=:default) = (@info "fetch_ref $role"; fetch(lookup_ref(rid; role = role).c, #=role=role,=# args...))
+
+
 
 """
     fetch(c::RemoteChannel)
@@ -656,6 +673,9 @@ Wait for and get a value from a [`RemoteChannel`](@ref). Exceptions raised are t
 same as for a [`Future`](@ref). Does not remove the item fetched.
 """
 fetch(r::RemoteChannel, args...; role= :default) = call_on_owner(fetch_ref, r, args...; role = role)::eltype(r)
+#fetch(r::RemoteChannel, args...; role= :default) = call_on_owner((rid, args...; role=role) -> fetch_ref(rid, args...;role=role), r, args...; role = role)::eltype(r)
+
+
 
 isready(rv::RemoteValue, args...) = isready(rv.c, args...)
 
@@ -722,12 +742,14 @@ If the channel is full, blocks until space is available.
 Return the first argument.
 """
 put!(rr::RemoteChannel, args...; role= :default) = (call_on_owner(put_ref, rr, myid(role = role), args...; role = role); rr)
+#put!(rr::RemoteChannel, args...; role= :default) = (call_on_owner((rid, caller, args...; role=role) -> put_ref(rid, caller, args...; role=role), rr, myid(role = role), args...; role = role); rr)
+
 
 # take! is not supported on Future
 
 take!(rv::RemoteValue, args...) = take!(rv.c, args...)
 function take_ref(rid, caller, args...; role=:default)
-    rv = lookup_ref(rid; role = role)call_on_owner
+    rv = lookup_ref(rid; role = role)
     synctake = false
     if myid(role = role) != caller && rv.synctake !== nothing
         # special handling for local put! / remote take! on unbuffered channel
@@ -760,6 +782,7 @@ end
 Fetch value(s) from a [`RemoteChannel`](@ref) `rr`,
 removing the value(s) in the process.
 """
+#take!(rr::RemoteChannel, args...; role= :default) = call_on_owner((rid, caller, args...; role=role) -> take_ref(rid, caller, args...; role=role), rr, myid(role = role), args...; role = role)::eltype(rr)
 take!(rr::RemoteChannel, args...; role= :default) = call_on_owner(take_ref, rr, myid(role = role), args...; role = role)::eltype(rr)
 
 # close and isopen are not supported on Future
@@ -773,18 +796,18 @@ isopen(rr::RemoteChannel; role= :default) = call_on_owner(isopen_ref, rr; role =
 getindex(r::RemoteChannel; role= :default) = fetch(r; role = role)
 getindex(r::Future; role= :default) = fetch(r; role = role)
 
-getindex(r::Future, args...; role= :default) = getindex(fetch(r; role = role), args...; role = role)
+getindex(r::Future, args...; role= :default) = getindex(fetch(r; role = role), args...#=; role = role=#)
 function getindex(r::RemoteChannel, args...; role= :default)
     if r.where == myid(role = role)
-        return getindex(fetch(r; role = role), args...; role = role)
+        return getindex(fetch(r; role = role), args...#=; role = role=#)
     end
-    return remotecall_fetch(r -> getindex(r, role = r.where = 1 ? :manager : :worker, args...), r.where, r; role = role)
+    return remotecall_fetch((r,role) -> getindex(r, role = role, args...), r.where, r, r.where == 1 ? :manager : :worker; role = role)
 end
 
 function iterate(c::RemoteChannel, state=nothing; role= :default)
     if isopen(c; role = role) || isready(c; role = role)
         try
-            return (take!(c), nothing)
+            return (take!(c; role=role), nothing)
         catch e
             if isa(e, InvalidStateException) ||
                 (isa(e, RemoteException) &&

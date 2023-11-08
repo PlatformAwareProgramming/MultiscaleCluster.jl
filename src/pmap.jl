@@ -26,7 +26,7 @@ function pgenerate(p::AbstractWorkerPool, f, c; role= :default)
     return Iterators.flatten(AsyncGenerator(remote(p, b -> asyncmap(f, b); role = role), batches))
 end
 pgenerate(p::AbstractWorkerPool, f, c1, c...; role= :default) = pgenerate(p, a->f(a...), zip(c1, c...); role = role)
-pgenerate(f, c; role= :default) = pgenerate(default_worker_pool(), f, c; role = role)
+pgenerate(f, c; role= :default) = pgenerate(default_worker_pool(role=role), f, c; role = role)
 pgenerate(f, c1, c...; role= :default) = pgenerate(a->f(a...), zip(c1, c...); role = role)
 
 """
@@ -153,7 +153,7 @@ function pmap(f, p::AbstractWorkerPool, c; distributed=true, batch_size=1, on_er
 end
 
 pmap(f, p::AbstractWorkerPool, c1, c...; kwargs...) = pmap(a->f(a...), p, zip(c1, c...); kwargs...)
-pmap(f, c; kwargs...) = pmap(f, CachingPool(workers()), c; kwargs...)
+pmap(f, c; role = :default, kwargs...) = pmap(f, CachingPool(workers(role = role)), c; role = role, kwargs...)
 pmap(f, c1, c...; kwargs...) = pmap(a->f(a...), zip(c1, c...); kwargs...)
 
 function wrap_on_error(f, on_error; capture_data=false)
@@ -211,7 +211,7 @@ function process_batch_errors!(p, f, results, on_error, retry_delays, retry_chec
     if length(reprocess) > 0
         errors = [x[2] for x in reprocess]
         exceptions = Any[x.ex for x in errors]
-        state = iterate(retry_delays; role = role)
+        state = iterate(retry_delays#=; role = role=#)
         state !== nothing && (state = state[2])
         error_processed = let state=state
             if (length(retry_delays)::Int > 0) &&

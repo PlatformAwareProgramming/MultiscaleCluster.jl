@@ -28,7 +28,7 @@ end
 
 function WorkerPool(; role= :default)
     wp = WorkerPool(Channel{Int}(typemax(Int)), RemoteChannel(role = role))
-    put!(wp.ref, WeakRef(wp))
+    put!(wp.ref, WeakRef(wp), role=role)
     wp
 end
 
@@ -101,7 +101,7 @@ function wp_local_take!(pool::AbstractWorkerPool; role= :default)
     worker = 0
     while true
         if length(pool) == 0
-            if pool === default_worker_pool()
+            if pool === default_worker_pool(role=role)
                 # No workers, the master process is used as a worker
                 worker = 1
                 break
@@ -121,11 +121,11 @@ function wp_local_take!(pool::AbstractWorkerPool; role= :default)
 end
 
 function remotecall_pool(rc_f, f, pool::AbstractWorkerPool, args...; role= :default, kwargs...)
-    worker = take!(pool)
+    worker = take!(pool; role=role)
     try
-        rc_f(f, worker, args...; role=role, kwargs...)
+        rc_f(f, worker, role=role, args...; kwargs...)
     finally
-        put!(pool, worker)
+        put!(pool, worker; role = role)
     end
 end
 
@@ -138,8 +138,7 @@ for (func, rt) = ((:length, Int), (:isready, Bool), (:workers, Vector{Int}), (:n
     @eval begin
         function ($func)(pool::WorkerPool; role= :default)
             if pool.ref.where != myid(role = role)
-                return remotecall_fetch(ref->(rrole = pool.ref.where == 1 ? :manager : :worker; 
-                                              ($func_local)(fetch(ref; role=rrole).value; role = rrole)), pool.ref.where, pool.ref; role = role)::$rt
+                return remotecall_fetch((ref, role)->(($func_local)(fetch(ref; role=role).value; role = role)), pool.ref.where, pool.ref, pool.ref.where == 1 ? :manager : :worker; role = role)::$rt
             else
                 return ($func_local)(pool; role = role)
             end
@@ -155,8 +154,7 @@ for func = (:push!, :put!)
     @eval begin
         function ($func)(pool::WorkerPool, w::Int; role= :default)
             if pool.ref.where != myid(role = role)
-                return remotecall_fetch((ref, w)->(rrole = pool.ref.where == 1 ? :manager : :worker; 
-                                                   ($func_local)(fetch(ref; role = rrole).value, w; role = rrole)), pool.ref.where, pool.ref, w; role = role)
+                return remotecall_fetch((ref, w, role)->(($func_local)(fetch(ref; role = role).value, w; role = role)), pool.ref.where, pool.ref, w, pool.ref.where == 1 ? :manager : :worker; role = role)
             else
                 return ($func_local)(pool, w; role = role)
             end
@@ -186,7 +184,8 @@ Future(2, 1, 6, nothing)
 ```
 In this example, the task ran on pid 2, called from pid 1.
 """
-remotecall(f, pool::AbstractWorkerPool, args...; role= :default, kwargs...) = remotecall_pool((f, pool) -> remotecall(f, pool, role=role, args...; kwargs...); role=role)
+#remotecall(f, pool::AbstractWorkerPool, args...; role= :default, kwargs...) = remotecall_pool((f, pool) -> remotecall(f, pool, role=role, args...; kwargs...); role=role)
+remotecall(f, pool::AbstractWorkerPool, args...; kwargs...) = remotecall_pool(remotecall, f, pool, args...; kwargs...)
 
 
 """
@@ -234,6 +233,7 @@ julia> remotecall_fetch(maximum, wp, A)
 """
 #remotecall_fetch(f, pool::AbstractWorkerPool, args...; role= :default, kwargs...) = remotecall_pool((f,pool)->remotecall_fetch(f, pool, role = role, args...; kwargs...), f, pool; role = role) # TO CHECK (dúvida com o primeiro "role = role")
 remotecall_fetch(f, pool::AbstractWorkerPool, args...; kwargs...) = remotecall_pool(remotecall_fetch, f, pool, args...; kwargs...)
+#remotecall_fetch(f, pool::AbstractWorkerPool, args...; role= :default, kwargs...) = remotecall_pool((f,pool)->remotecall_fetch((p, args...) -> f(p, args...), pool, args...; role = role, kwargs...), f, pool; role = role) # TO CHECK (dúvida com o primeiro "role = role")
 
 """
     remote_do(f, pool::AbstractWorkerPool, args...; kwargs...) -> nothing
@@ -268,7 +268,7 @@ function default_worker_pool(;role=:default)
         if myid(role=role) == 1
             _default_worker_pool[] = WorkerPool(role = role)
         else
-            _default_worker_pool[] = remotecall_fetch(()->default_worker_pool(role = :manager), 1; role=role)
+            _default_worker_pool[] = remotecall_fetch(role->default_worker_pool(role = role), 1, :manager; role=role)
         end
     end
     return _default_worker_pool[]
@@ -363,13 +363,13 @@ function exec_from_cache(f_ref::Tuple{Function, RemoteChannel}, args...; role= :
 end
 
 function remotecall_pool(rc_f, f, pool::CachingPool, args...; role= :default, kwargs...)
-    worker = take!(pool)
+    worker = take!(pool; role=role)
     f_ref = get(pool.map_obj2ref, (worker, f), (f, RemoteChannel(worker; role=role)))
     isa(f_ref, Tuple) && (pool.map_obj2ref[(worker, f)] = f_ref[2])   # Add to tracker
 
     try
         rc_f(exec_from_cache, worker, f_ref, args...; role=role, kwargs...)
     finally
-        put!(pool, worker)
+        put!(pool, worker; role=role)
     end
 end

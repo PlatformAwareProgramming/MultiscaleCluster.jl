@@ -59,9 +59,9 @@ wraps the `pid` of the worker and a captured exception. A `CapturedException` ca
 remote exception and a serializable form of the call stack when the exception was raised.
 """
 RemoteException(captured; role= :default) = RemoteException(myid(role=role), captured)
-function showerror(io::IO, re::RemoteException; role= :default)
-    (re.pid != myid(role = role)) && print(io, "On worker ", re.pid, ":\n")
-    showerror(io, re.captured; role = role)
+function showerror(io::IO, re::RemoteException#=; role= :default=#)
+    (re.pid != myid(#=role = role=#)) && print(io, "On worker ", re.pid, ":\n")
+    showerror(io, re.captured#=; role = role=#)
 end
 
 function run_work_thunk(thunk::Function, print_error::Bool; role=:default)
@@ -71,7 +71,7 @@ function run_work_thunk(thunk::Function, print_error::Bool; role=:default)
     catch err
         ce = CapturedException(err, catch_backtrace())
         result = RemoteException(ce; role=role)
-        print_error && showerror(stderr, ce; role = role)
+        print_error && showerror(stderr, ce#=; role = role=#)
     end
     return result
 end
@@ -170,11 +170,12 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool; role= 
         while true
             reset_state(serializer)
             header = deserialize_hdr_raw(r_stream)
-            # println("header: ", header)
+            #println("header: ", header)
 
             try
                 msg = invokelatest(deserialize_msg, serializer)
             catch e
+                #println("*************************************************")
                 # Deserialization error; discard bytes in stream until boundary found
                 boundary_idx = 1
                 while true
@@ -206,7 +207,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool; role= 
             end
             readbytes!(r_stream, boundary, length(MSG_BOUNDARY))
 
-            # println("got msg: ", typeof(msg))
+            #println("got msg: ", typeof(msg))
             handle_msg(msg, header, r_stream, w_stream, version; role = role)
         end
     catch e
@@ -282,6 +283,7 @@ function handle_msg(msg::CallMsg{:call}, header, r_stream, w_stream, version; ro
     schedule_call(header.response_oid, ()->invokelatest(msg.f, msg.args...; msg.kwargs...); role = role)
 end
 function handle_msg(msg::CallMsg{:call_fetch}, header, r_stream, w_stream, version; role= :default)
+    #@info "handle ", msg
     errormonitor(@async begin
         v = run_work_thunk(()->invokelatest(msg.f, msg.args...; msg.kwargs...), false; role=role)
         if isa(v, SyncTake)
@@ -327,8 +329,8 @@ function handle_msg(msg::IdentifySocketAckMsg, header, r_stream, w_stream, versi
 end
 
 function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version; role= :default)
-    @info "handle_msg: ", msg
-    LPROC.id = msg.self_pid
+    #LPROC.id = msg.self_pid
+    myid!(msg.self_pid, role=role)
     controller = Worker(1, r_stream, w_stream, cluster_manager; version=version, role = role)
     notify(controller.initialized)
     register_worker(LPROC)
@@ -382,7 +384,7 @@ function handle_msg(msg::JoinCompleteMsg, header, r_stream, w_stream, version; r
     w.version = version
 
     ntfy_channel = lookup_ref(header.notify_oid; role = role)
-    put!(ntfy_channel, w.id)
+    put!(ntfy_channel, wid(w,role=role))
 
-    push!(default_worker_pool(), w.id)
+    push!(default_worker_pool(role=role), wid(w,role=role), role = role)
 end

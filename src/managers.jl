@@ -228,7 +228,7 @@ function parse_machine(machine::AbstractString)
 end
 
 function launch_on_machine(manager::SSHManager, machine::AbstractString, cnt, params::Dict, launched::Array, launch_ntfy::Condition)
-    @info "launch_on_machine"
+    #@info "launch_on_machine"
     shell = params[:shell]
     ssh = params[:ssh]
     dir = params[:dir]

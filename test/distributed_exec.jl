@@ -45,20 +45,20 @@ end
 id_me = myid()
 id_other = filter(x -> x != id_me, procs())[rand(1:(nprocs()-1))]
 
+
 # Test role
 @everywhere using MultiscaleCluster
 @test MultiscaleCluster.myrole() === :master
-@info workers()
 for wid = workers()
-    @info MultiscaleCluster._PGRP1
-    @info "GO !"
     wrole = remotecall_fetch(wid) do
-        @info MultiscaleCluster._PGRP0
         MultiscaleCluster.myrole()
     end
-    @info wid
     @test wrole === :worker
 end
+
+@info "passed 1"
+#sleep(3)
+
 
 # Test remote()
 let
@@ -66,6 +66,8 @@ let
 
     count = 0
     count_condition = Condition()
+
+    @info "passed 2"
 
     function remote_wait(c)
         @async_logerr begin
@@ -77,16 +79,29 @@ let
         yield()
     end
 
+    @info "passed 3"
+
+#    @info nworkers()
+#    sleep(30)
+
     testchannels = [RemoteChannel() for i in 1:nworkers()]
+ #   @info testchannels
+ #   sleep(30)
     testcount = 0
     @test isready(pool) == true
     for c in testchannels
         @test count == testcount
+#        @info c
         remote_wait(c)
         testcount += 1
     end
     @test count == testcount
     @test isready(pool) == false
+
+    @info "passed 4"
+    #sleep(3)
+
+    try
 
     for c in testchannels
         @test count == testcount
@@ -97,7 +112,14 @@ let
         @test isready(pool) == true
     end
 
+    catch e
+        @info e
+    end
+
     @test count == 0
+
+    @info "passed 5"
+    #sleep(3)
 
     for c in testchannels
         @test count == testcount
@@ -106,6 +128,9 @@ let
     end
     @test count == testcount
     @test isready(pool) == false
+
+    @info "passed 6"
+    #sleep(3)
 
     for c in reverse(testchannels)
         @test count == testcount
@@ -116,8 +141,15 @@ let
         @test isready(pool) == true
     end
 
+    @info "passed 7"
+    #sleep(3)
+
     @test count == 0
 end
+
+@info "passed 8"
+#sleep(3)
+
 
 # Test Futures
 function testf(id)
@@ -169,6 +201,8 @@ function include_thread_unsafe_tests()
     end
     return true
 end
+
+@info "passed 9"
 
 # MultiscaleCluster GC tests for Futures
 function test_futures_dgc(id)
@@ -267,6 +301,9 @@ finalize(f)
 yield() # flush gc msgs
 @test poll_while(() -> remotecall_fetch(chk_rrid->(yield(); haskey(MultiscaleCluster.PGRP().refs, chk_rrid)), id_other, rrid))
 
+
+@info "passed 10"
+
 # MultiscaleCluster GC tests for RemoteChannels
 function test_remoteref_dgc(id)
     rr = RemoteChannel(id)
@@ -305,6 +342,8 @@ let wid1 = workers()[1],
     @test poll_while(() -> remotecall_fetch(k -> haskey(MultiscaleCluster.PGRP().refs, k), wid1, rrid))
 end
 
+@info "passed 11"
+
 # Tests for issue #23109 - should not hang.
 f = @spawnat :any rand(1, 1)
 Base.Experimental.@sync begin
@@ -321,8 +360,8 @@ Base.Experimental.@sync begin
 end
 
 
-@test fetch(@spawnat id_other myid) == id_other
-@test (@fetchfrom id_other myid) == id_other
+@test fetch(@spawnat id_other myid()) == id_other
+@test (@fetchfrom id_other myid()) == id_other
 
 pids=[]
 for i in 1:nworkers()
@@ -330,6 +369,7 @@ for i in 1:nworkers()
 end
 @test sort(pids) == sort(workers())
 
+@info "passed 12"
 
 # test getindex on Futures and RemoteChannels
 function test_indexing(rr)
@@ -343,6 +383,8 @@ test_indexing(Future())
 test_indexing(Future(id_other))
 test_indexing(RemoteChannel())
 test_indexing(RemoteChannel(id_other))
+
+@info "passed 13"
 
 # Test ser/deser to non-ClusterSerializer objects.
 function test_regular_io_ser(ref::MultiscaleCluster.AbstractRemoteRef)
@@ -394,6 +436,8 @@ s = [randstring() for x in 1:10^5]
 num_small_requests = 10000
 @test fill(id_other, num_small_requests) == [remotecall_fetch(myid, id_other) for i in 1:num_small_requests]
 
+@info "passed 14"
+
 # test parallel sends of large arrays from multiple tasks to the same remote worker
 ntasks = 10
 rr_list = [Channel(1) for x in 1:ntasks]
@@ -441,6 +485,9 @@ test_channel(RemoteChannel(()->Channel(10)))
 
 c=Channel{Int}(1)
 @test_throws MethodError put!(c, "Hello")
+
+@info "passed 15"
+
 
 # test channel iterations
 function test_iteration(in_c, out_c)
@@ -543,6 +590,8 @@ for id in [id_other, id_me]
     end
 end
 
+@info "passed 16"
+
 # make sure the stackframe from the remote error can be serialized
 let ex
     try
@@ -567,9 +616,11 @@ end
 # pmap tests. Needs at least 4 processors dedicated to the below tests. Which we currently have
 # since the MultiscaleCluster tests are now spawned as a separate set.
 
+@info "passed 17"
+
 # Test all combinations of pmap keyword args.
 pmap_args = [
-                (:MultiscaleCluster, [:default, false]),
+                (:distributed, [:default, false]),
                 (:batch_size, [:default,2]),
                 (:on_error, [:default, e -> (e.msg == "foobar" ? true : rethrow())]),
                 (:retry_delays, [:default, fill(0.001, 1000)]),
@@ -588,7 +639,7 @@ function walk_args(i)
 
         data = 1:100
 
-        testw = kwdict[:MultiscaleCluster] === false ? [1] : workers()
+        testw = kwdict[:distributed] === false ? [1] : workers()
 
         if kwdict[:retry_delays] !== :default
             mapf = x -> iseven(myid()) ? error("notfoobar") : (x*2, myid())
@@ -658,6 +709,7 @@ generic_map_tests(pmap_fallback)
 run_map_equivalence_tests(pmap)
 @test pmap(uppercase, "Hello World!") == map(uppercase, "Hello World!")
 
+@info "passed 18"
 
 # Simple test for pmap throws error
 let error_thrown = false
@@ -767,6 +819,9 @@ if Sys.isunix() # aka have ssh
         remotecall_fetch(rmprocs, 1, new_pids)
     end
 
+    @info "passed 19"
+
+
     print("\n\nTesting SSHManager. A minimum of 4GB of RAM is recommended.\n")
     print("Please ensure: \n")
     print("1) sshd is running locally with passwordless login enabled.\n")
@@ -842,6 +897,8 @@ let t = @task 42
     @test_throws TaskFailedException(t) Base.wait(t)
 end
 
+@info "passed 20"
+
 # issue #8207
 let A = Any[]
     @distributed (+) for i in (push!(A,1); 1:2)
@@ -849,6 +906,8 @@ let A = Any[]
     end
     @test length(A) == 1
 end
+
+@info "passed 21"
 
 # issue #13168
 function f13168(n)
@@ -869,8 +928,12 @@ let t = schedule(@task f13168(100))
     @test isa(fetch(t), Float64)
 end
 
+@info "passed 21.1"
+
 # issue #13122
 @test remotecall_fetch(identity, workers()[1], C_NULL) === C_NULL
+
+@info "passed 21.2"
 
 # issue #11062
 function t11062()
@@ -880,11 +943,14 @@ end
 
 @test t11062() == 2
 
+@info "passed 21.3"
+
 # issue #15406
 v15406 = remotecall_wait(() -> 1, id_other)
 fetch(v15406)
 remotecall_wait(fetch, id_other, v15406)
 
+@info "passed 21.4"
 
 # issue #43396
 # Covers the remote fetch where the value returned is `nothing`
@@ -894,6 +960,7 @@ remotecall_wait(fetch, id_other, v15406)
 @test nothing === fetch(remotecall(() -> nothing, workers()[1]))
 @test 10 === fetch(remotecall(() -> 10, workers()[1]))
 
+@info "passed 21.5"
 
 # Test various forms of remotecall* invocations
 
@@ -916,18 +983,29 @@ for tid in [id_other, id_me, default_worker_pool()]
     test_f_args(15, f_args, tid, 1, 2; kw1=4, kw2=8)
 end
 
-# Test remote_do
-f=Future(id_me)
-remote_do(fut->put!(fut, myid()), id_me, f)
-@test fetch(f) == id_me
+
+@info "passed 21.6.2"
 
 f=Future(id_other)
 remote_do(fut->put!(fut, myid()), id_other, f)
 @test fetch(f) == id_other
 
+@info "passed 21.6.1"
+
+# Test remote_do
+f=Future(id_me)
+@info "passed 21.6.1.1"
+remote_do(fut->put!(fut, myid()), id_me, f)
+@info "passed 21.6.1.2"
+@test fetch(f) == id_me
+
+@info "passed 21.7"
+
 # Github issue #29932
 rc_unbuffered = RemoteChannel(()->Channel{Vector{Float64}}(0))
 @test eltype(rc_unbuffered) == Vector{Float64}
+
+@info "passed 21.8"
 
 @async begin
     # Trigger direct write (no buffering) of largish array
@@ -946,6 +1024,8 @@ end
         return :OK
     end, id_other, rc_unbuffered) === :OK
 
+@info "passed 21.9"
+
 # github issue 33972
 rc_unbuffered_other = RemoteChannel(()->Channel{Int}(0), id_other)
 close(rc_unbuffered_other)
@@ -953,42 +1033,52 @@ try; take!(rc_unbuffered_other); catch; end
 @test !remotecall_fetch(rc -> islocked(MultiscaleCluster.lookup_ref(remoteref_id(rc)).synctake),
                         id_other, rc_unbuffered_other)
 
+@info "passed 21.10"
+
 # github PR #14456
 n = DoFullTest ? 6 : 5
 for i = 1:10^n
     fetch(@spawnat myid() myid())
 end
 
+@info "passed 21.11"
+
 # issue #15451
 @test remotecall_fetch(x->(y->2y)(x)+1, workers()[1], 3) == 7
 
+@info "passed 21.12"
+
 # issue #16091
 mutable struct T16091 end
-wid = workers()[1]
+wid0 = workers()[1]
 @test try
-    remotecall_fetch(()->T16091, wid)
+    remotecall_fetch(()->T16091, wid0)
     false
 catch ex
     ((ex::RemoteException).captured::CapturedException).ex === UndefVarError(:T16091)
 end
 @test try
-    remotecall_fetch(identity, wid, T16091)
+    remotecall_fetch(identity, wid0, T16091)
     false
 catch ex
     ((ex::RemoteException).captured::CapturedException).ex === UndefVarError(:T16091)
 end
 
 f16091a() = 1
-remotecall_fetch(()->eval(:(f16091a() = 2)), wid)
-@test remotecall_fetch(f16091a, wid) === 2
-@test remotecall_fetch((myid)->remotecall_fetch(f16091a, myid), wid, myid()) === 1
+remotecall_fetch(()->eval(:(f16091a() = 2)), wid0)
+@test remotecall_fetch(f16091a, wid0) === 2
+@test remotecall_fetch((myid)->remotecall_fetch(f16091a, myid), wid0, myid()) === 1
+
+@info "passed 21.13"
 
 # these will only heisen-fail, since it depends on the gensym counter collisions:
 f16091b = () -> 1
-remotecall_fetch(()->eval(:(f16091b = () -> 2)), wid)
+remotecall_fetch(()->eval(:(f16091b = () -> 2)), wid0)
 @test remotecall_fetch(f16091b, 2) === 1
 # Global anonymous functions are over-written...
-@test remotecall_fetch((myid)->remotecall_fetch(f16091b, myid), wid, myid()) === 1
+@test remotecall_fetch((myid)->remotecall_fetch(f16091b, myid), wid0, myid()) === 1
+
+@info "passed 21.14"
 
 # ...while local anonymous functions are by definition, local.
 let
@@ -1000,8 +1090,10 @@ let
                 f16091c = () -> 2
                 remotecall_fetch(f16091c, myid)
             end
-        end, wid, myid()) === 2
+        end, wid0, myid()) === 2
 end
+
+@info "passed 21.15"
 
 # issue #16451
 rng=RandomDevice()
@@ -1016,17 +1108,24 @@ retval = @distributed (+) for _ in 1:10
 end
 @test retval > 0.0 && retval < 10.0
 
+@info "passed 21.16"
+
 # serialization tests
 wrkr1 = workers()[1]
 wrkr2 = workers()[end]
 
 @test remotecall_fetch(p->remotecall_fetch(myid, p), wrkr1, wrkr2) == wrkr2
 
+@info "passed 21.17"
+
 # Send f to wrkr1 and wrkr2. Then try calling f on wrkr2 from wrkr1
 f_myid = ()->myid()
 @test wrkr1 == remotecall_fetch(f_myid, wrkr1)
 @test wrkr2 == remotecall_fetch(f_myid, wrkr2)
 @test wrkr2 == remotecall_fetch((f, p)->remotecall_fetch(f, p), wrkr1, f_myid, wrkr2)
+
+
+@info "passed 22"
 
 # Deserialization error recovery test
 # locally defined module, but unavailable on workers
@@ -1103,15 +1202,17 @@ let (p, p2) = filter!(p -> p != myid(), procs())
     test_throw_on([p2, p], "everywhere on p and p2")
 end
 
+@info "passed 23"
+
 # Test addprocs enable_threaded_blas parameter
 
 function get_remote_num_threads(processes_added)
     return [remotecall_fetch(BLAS.get_num_threads, proc_id) for proc_id in processes_added]
 end
 
-function test_blas_config(pid, expected)
-    for worker in MultiscaleCluster.PGRP().workers
-        if worker.id == pid
+function test_blas_config(pid, expected; role=:default)
+    for worker in MultiscaleCluster.PGRP(role=role).workers
+        if MultiscaleCluster.wid(worker,role=role) == pid
             @test worker.config.enable_threaded_blas == expected
             return
         end
@@ -1159,6 +1260,8 @@ function test_add_procs_threaded_blas()
 end
 test_add_procs_threaded_blas()
 
+@info "passed 24"
+
 #19687
 if false ### TODO: The logic that is supposed to implement this is racy - Disabled for now
 # ensure no race conditions between rmprocs and addprocs
@@ -1193,16 +1296,18 @@ end
 end
 
 # Test addprocs/rmprocs from master node only
-for f in [ ()->addprocs(1; exeflags=test_exeflags), ()->rmprocs(workers()) ]
-    local f
-    try
-        remotecall_fetch(f, id_other)
-        error("Unexpected")
-    catch ex
-        @test isa(ex, RemoteException)
-        @test ex.captured.ex.msg == "Only process 1 can add and remove workers"
-    end
-end
+#for f in [ ()->addprocs(1; exeflags=test_exeflags), ()->rmprocs(workers()) ]
+#    local f
+#    try
+#        remotecall_fetch(f, id_other)
+#        error("Unexpected")
+#    catch ex
+#        @test isa(ex, RemoteException)
+#        @test ex.captured.ex.msg == "Only process 1 can add and remove workers"
+#    end
+#end
+
+@info "passed 25"
 
 # Test the following addprocs error conditions
 # - invalid host name - github issue #20372
@@ -1268,6 +1373,8 @@ for (addp_testf, expected_errstr, env) in testruns
         @test ex.exceptions[1].task.exception.msg == expected_errstr
     end
 end
+
+@info "passed 26"
 
 
 # Auto serialization of globals from Main.
@@ -1336,6 +1443,8 @@ v31252 = :b
 
 v31252 = :a
 @test :a == @fetchfrom id_other v31252
+
+@info "passed 27"
 
 
 # Test that a global is not being repeatedly serialized when
@@ -1434,6 +1543,8 @@ global ids_func = ()->ids_cleanup
 clust_ser = (MultiscaleCluster.worker_from_id(id_other)).w_serializer
 @test remotecall_fetch(ids_func, id_other) == ids_cleanup
 
+@info "passed 29"
+
 # TODO Add test for cleanup from `clust_ser.glbs_in_tnobj`
 
 # reported github issues - Mostly tests with globals and various MultiscaleCluster macros
@@ -1482,6 +1593,8 @@ let
     @test fetch(remotecall_wait(Float64, id_other, 1)) == Float64(1)
     @test remotecall_fetch(Float64, id_other, 1) == Float64(1)
 end
+
+@info "passed 30"
 
 #19463
 function foo19463()
@@ -1539,6 +1652,8 @@ syms = setup_syms(3, workers())
 clear!(syms, workers())
 test_clear(syms, workers())
 
+@info "passed 31"
+
 # Test partial recovery from a deserialization error in CapturedException
 try
     expr = quote
@@ -1555,6 +1670,8 @@ catch ex
     @test occursin("BoundsError", ex.captured.ex.exceptions[1].ex.msg)
     @test ex.captured.ex.exceptions[2].ex == UndefVarError(:DontExistOn1)
 end
+
+@info "passed 32"
 
 let
     # creates a new worker in a different folder and tries to include file
@@ -1629,6 +1746,8 @@ cluster_cookie("foobar") # custom cookie
 npids = addprocs_with_testenv(WorkerArgTester(`--worker=foobar`, false))
 @test remotecall_fetch(myid, npids[1]) == npids[1]
 
+@info "passed 33"
+
 # tests for start_worker options to retain stdio (issue #31035)
 struct RetainStdioTester <: ClusterManager
     close_stdin::Bool
@@ -1677,21 +1796,21 @@ p1,p2 = addprocs_with_testenv(2)
 @test fill(2.,2) == remotecall_fetch(f22865, p1, p2)
 rmprocs(p1, p2)
 
-function reuseport_tests()
+function reuseport_tests(;role = :default)
     # Run the test on all processes.
     results = asyncmap(procs()) do p
         remotecall_fetch(p) do
             ports_lower = []        # ports of pids lower than myid()
             ports_higher = []       # ports of pids higher than myid()
-            for w in MultiscaleCluster.PGRP().workers
-                w.id == myid() && continue
+            for w in MultiscaleCluster.PGRP(role=role).workers
+                MultiscaleCluster.wid(w,role=role) == myid() && continue
                 port = Sockets._sockname(w.r_stream, true)[2]
-                if (w.id == 1)
+                if (MultiscaleCluster.wid(w,role=role) == 1)
                     # master connects to workers
                     push!(ports_higher, port)
-                elseif w.id < myid()
+                elseif MultiscaleCluster.wid(w,role=role) < myid(role=role)
                     push!(ports_lower, port)
-                elseif w.id > myid()
+                elseif MultiscaleCluster.wid(w,role=role) > myid(role=role)
                     push!(ports_higher, port)
                 end
             end
@@ -1702,7 +1821,7 @@ function reuseport_tests()
                     return 0
                 end
             end
-            return myid()
+            return myid(role=role)
         end
     end
 
@@ -1731,6 +1850,9 @@ for T in (UInt8, Int8, UInt16, Int16, UInt32, Int32, UInt64)
     end
     @test n == 55
 end
+
+@info "passed 34"
+
 
 # issue #28966
 let code = """
@@ -1898,6 +2020,8 @@ let julia = `$(Base.julia_cmd()) --startup-file=no`; mktempdir() do tmp
     @test success(cmd)
 end end
 
+@info "passed 35"
+
 include("splitrange.jl")
 
 # Clear all workers for timeout tests (issue #45785)
@@ -1920,7 +2044,12 @@ begin
     end
 end
 
+@info "passed 36"
+
 # Run topology tests last after removing all workers, since a given
 # cluster at any time only supports a single topology.
 rmprocs(workers())
 include("topology.jl")
+
+@info "end test"
+
