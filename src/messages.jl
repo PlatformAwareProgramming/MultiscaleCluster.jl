@@ -144,10 +144,10 @@ function flush_gc_msgs(w::Worker; role= :default)
         end
     end
     if add_msgs !== nothing
-        remote_do((add_msgs, role) -> add_clients(add_msgs, role = role), w, add_msgs, wid(w,role=role) == 1 ? :manager : :worker; role = role)
+        remote_do((add_msgs, role) -> add_clients(add_msgs, role = role), w, add_msgs, wid(w,role=role) == 1 ? :master : :worker; role = role)
     end
     if del_msgs !== nothing
-        remote_do((del_msgs, role) -> del_clients(del_msgs, role = role), w, del_msgs, wid(w,role=role) == 1 ? :manager : :worker; role = role)
+        remote_do((del_msgs, role) -> del_clients(del_msgs, role = role), w, del_msgs, wid(w,role=role) == 1 ? :master : :worker; role = role)
     end
     return
 end

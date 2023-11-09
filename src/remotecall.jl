@@ -218,7 +218,7 @@ function isready(rr::Future; role= :default)
     return if rr.where == myid(role = role)
         isready(lookup_ref(rid; role = role).c)
     else
-        remotecall_fetch((rid, role)->isready(lookup_ref(rid; role = role).c), rr.where, rid, rr.where == 1 ? :manager : :worker; role = role)
+        remotecall_fetch((rid, role)->isready(lookup_ref(rid; role = role).c), rr.where, rid, rr.where == 1 ? :master : :worker; role = role)
     end
 end
 
@@ -235,7 +235,7 @@ function isready(rr::RemoteChannel, args...; role= :default)
     return if rr.where == myid(role = role)
         isready(lookup_ref(rid; role = role).c, args...)
     else
-        remotecall_fetch(rid->isready(lookup_ref(rid; role = rr.where == 1 ? :manager : :worker).c, args...), rr.where, rid; role = role)
+        remotecall_fetch(rid->isready(lookup_ref(rid; role = rr.where == 1 ? :master : :worker).c, args...), rr.where, rid; role = role)
     end
 end
 
@@ -446,7 +446,7 @@ Return a [`Future`](@ref).
 Keyword arguments, if any, are passed through to `f`.
 """
 remotecall(f, id::Integer, args...; role= :default, kwargs...) = 
-#            remotecall(f, worker_from_id(id; role = id == 1 ? :manager : :worker), args...; role = role, kwargs...)
+#            remotecall(f, worker_from_id(id; role = id == 1 ? :master : :worker), args...; role = role, kwargs...)
             remotecall(f, worker_from_id(id; role = role), args...; role = role, kwargs...)
 
 function remotecall_fetch(f, w::LocalProcess, args...; role= :default, kwargs...)
@@ -565,12 +565,12 @@ function call_on_owner(f, rr::AbstractRemoteRef, args...; role= :default)
     if rr.where == myid(role = role)
         f(rid, args...)
     else
-        #remotecall_fetch((rid,role) -> f(rid, role = role, args...), rr.where, rid, rr.where==1 ? :manager : :worker; role = role)
-        remotecall_fetch((rid,role) -> f(rid, args...; role=role), rr.where, rid, rr.where==1 ? :manager : :worker; role = role)
+        #remotecall_fetch((rid,role) -> f(rid, role = role, args...), rr.where, rid, rr.where==1 ? :master : :worker; role = role)
+        remotecall_fetch((rid,role) -> f(rid, args...; role=role), rr.where, rid, rr.where==1 ? :master : :worker; role = role)
 
 
-        #remotecall_fetch(rid -> f(rid, role = rr.where==1 ? :manager : :worker, args...), rr.where; role = role)
-        #remotecall_fetch(iiiii, rr.where, f, rid, rr.where==1 ? :manager : :worker, args...; role = role)
+        #remotecall_fetch(rid -> f(rid, role = rr.where==1 ? :master : :worker, args...), rr.where; role = role)
+        #remotecall_fetch(iiiii, rr.where, f, rid, rr.where==1 ? :master : :worker, args...; role = role)
 #        remotecall_fetch(f, rr.where, rid, args...)
 
     end
@@ -662,7 +662,7 @@ function fetch(r::Future; role= :default)
     something(v_cache)
 end
 
-fetch_ref(rid, args...; role=:default) = (@info "fetch_ref $role"; fetch(lookup_ref(rid; role = role).c, #=role=role,=# args...))
+fetch_ref(rid, args...; role=:default) = fetch(lookup_ref(rid; role = role).c, #=role=role,=# args...)
 
 
 
@@ -801,7 +801,7 @@ function getindex(r::RemoteChannel, args...; role= :default)
     if r.where == myid(role = role)
         return getindex(fetch(r; role = role), args...#=; role = role=#)
     end
-    return remotecall_fetch((r,role) -> getindex(r, role = role, args...), r.where, r, r.where == 1 ? :manager : :worker; role = role)
+    return remotecall_fetch((r,role) -> getindex(r, role = role, args...), r.where, r, r.where == 1 ? :master : :worker; role = role)
 end
 
 function iterate(c::RemoteChannel, state=nothing; role= :default)

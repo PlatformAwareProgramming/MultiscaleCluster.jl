@@ -191,7 +191,7 @@ Similar to calling `remotecall_eval(Main, procs, expr)`, but with two extra feat
 """
 macro everywhere(ex)
     procs = GlobalRef(@__MODULE__, :procs)
-    return esc(:($(MultiscaleCluster).@everywhere $procs(role = :manager) $ex))
+    return esc(:($(MultiscaleCluster).@everywhere $procs(role = :master) $ex))
 end
 
 macro everywhere(procs, ex)
@@ -200,7 +200,7 @@ macro everywhere(procs, ex)
         $(isempty(imps) ? nothing : Expr(:toplevel, imps...)) # run imports locally first
         let ex = Expr(:toplevel, :(task_local_storage()[:SOURCE_PATH] = $(get(task_local_storage(), :SOURCE_PATH, nothing))), $(esc(Expr(:quote, ex)))),
             procs = $(esc(procs))
-            remotecall_eval(Main, procs, ex; role = :manager)
+            remotecall_eval(Main, procs, ex; role = :master)
         end
     end
 end

@@ -724,19 +724,19 @@ It should cause the remote worker specified by `pid` to exit.
 on `pid`.
 """
 function kill(manager::ClusterManager, pid::Int, config::WorkerConfig)
-    remote_do(exit, pid; role = :manager)
+    remote_do(exit, pid; role = :master)
     nothing
 end
 
 function kill(manager::SSHManager, pid::Int, config::WorkerConfig)
-    remote_do(exit, pid; role = :manager)
+    remote_do(exit, pid; role = :master)
     cancel_ssh_tunnel(config)
     nothing
 end
 
 function kill(manager::LocalManager, pid::Int, config::WorkerConfig; exit_timeout = 15, term_timeout = 15)
     # First, try sending `exit()` to the remote over the usual control channels
-    remote_do(exit, pid; role = :manager)
+    remote_do(exit, pid; role = :master)
 
     timer_task = @async begin
         sleep(exit_timeout)

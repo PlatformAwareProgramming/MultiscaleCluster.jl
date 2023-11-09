@@ -168,7 +168,7 @@ function check_worker_state(w::Worker; role= :default)
                 t = @async exec_conn_func(w; role=role)
             else
                 # route request via node 1
-                t = @async remotecall_fetch((p,to_id) -> remotecall_fetch((to_id, role) -> exec_conn_func(to_id, role = role), p, to_id, p == 1 ? :manager : :worker; role = role), 1, wid(w, role=role), myid(role=role))
+                t = @async remotecall_fetch((p,to_id) -> remotecall_fetch((to_id, role) -> exec_conn_func(to_id, role = role), p, to_id, p == 1 ? :master : :worker; role = role), 1, wid(w, role=role), myid(role=role))
             end
             errormonitor(t)
             wait_for_conn(w; role=role)
@@ -214,16 +214,16 @@ mutable struct LocalProcess
 end
 
 function wid(lp::LocalProcess; role= :default) 
-    if role == :manager 
+    if role == :master 
         return lp.id1
     elseif role == :worker 
         return lp.id0
     elseif role == :default && myrole() == :master
-        return lp.id1 # as :manager
+        return lp.id1 # as :master
     elseif role == :default && myrole() == :worker
         return lp.id0 # as :worker
     else
-        return lp.id1 # as :manager
+        return lp.id1 # as :master
         #throw("unexpected use of role=:default (wid)")
     end
 
@@ -468,9 +468,9 @@ function addprocs(manager::ClusterManager; kwargs...)
     try
 
         if myrole() == :worker
-            myrole!(:manager_worker)
+            myrole!(:master_worker)
         end
-        PGRP(role=:manager).level = PGRP(role=:worker).level + 1
+        PGRP(role=:master).level = PGRP(role=:worker).level + 1
 
         addprocs_locked(manager::ClusterManager; kwargs...)
     finally
@@ -480,9 +480,9 @@ end
 
 function addprocs_locked(manager::ClusterManager; kwargs...)
     params = merge(default_addprocs_params(manager), Dict{Symbol,Any}(kwargs))
-    topology(Symbol(params[:topology]); role = :manager)
+    topology(Symbol(params[:topology]); role = :master)
 
-    pgm = PGRP(role = :manager) 
+    pgm = PGRP(role = :master) 
 
     if pgm.topology !== :all_to_all
         params[:lazy] = false
@@ -490,8 +490,8 @@ function addprocs_locked(manager::ClusterManager; kwargs...)
 
     if pgm.lazy === nothing || nprocs() == 1
         pgm.lazy = params[:lazy]
-    elseif isclusterlazy(role = :manager) != params[:lazy]
-        throw(ArgumentError(string("Active workers with lazy=", isclusterlazy(role = :manager),
+    elseif isclusterlazy(role = :master) != params[:lazy]
+        throw(ArgumentError(string("Active workers with lazy=", isclusterlazy(role = :master),
                                     ". Cannot set lazy=", params[:lazy])))
     end
 
@@ -536,9 +536,9 @@ function addprocs_locked(manager::ClusterManager; kwargs...)
     # Since all worker-to-worker setups may not have completed by the time this
     # function returns to the caller, send the complete list to all workers.
     # Useful for nprocs(), nworkers(), etc to return valid values on the workers.
-    all_w = workers(role = :manager)
+    all_w = workers(role = :master)
     for pid in all_w
-        remote_do((all_w, role) -> set_valid_processes(all_w, role = role), pid, all_w, pid == 1 ? :manager : :worker; role = :manager)
+        remote_do((all_w, role) -> set_valid_processes(all_w, role = role), pid, all_w, pid == 1 ? :master : :worker; role = :master)
     end
 
     sort!(launched_q)
@@ -593,7 +593,7 @@ function launch_n_additional_processes(manager, frompid, fromconfig, cnt, launch
         exeflags = something(fromconfig.exeflags, ``)
         cmd = `$exename $exeflags`
 
-        new_addresses = remotecall_fetch(launch_additional, frompid, cnt, cmd; role = :manager)
+        new_addresses = remotecall_fetch(launch_additional, frompid, cnt, cmd; role = :master)
         for address in new_addresses
             (bind_addr, port) = address
 
@@ -607,7 +607,7 @@ function launch_n_additional_processes(manager, frompid, fromconfig, cnt, launch
             let wconfig=wconfig
                 @async begin
                     pid = create_worker(manager, wconfig)
-                    remote_do(redirect_output_from_additional_worker, frompid, pid, port; role = :manager)
+                    remote_do(redirect_output_from_additional_worker, frompid, pid, port; role = :master)
                     push!(launched_q, pid)
                 end
             end
@@ -616,7 +616,7 @@ function launch_n_additional_processes(manager, frompid, fromconfig, cnt, launch
 end
 
 function create_worker(manager, wconfig)
-    role = :manager
+    role = :master
 
     # only node 1 can add new nodes, since nobody else has the full list of address:port
     @assert myid(role=role) == 1
@@ -651,7 +651,7 @@ function create_worker(manager, wconfig)
 
     # Start a new task to handle inbound messages from connected worker in master.
     # Also calls `wait_connected` on TCP streams.
-    process_messages(w.r_stream, w.w_stream, false; role = :manager)
+    process_messages(w.r_stream, w.w_stream, false; role = :master)
 
     # send address information of all workers to the new worker.
     # Cluster managers set the address of each worker in `WorkerConfig.connect_at`.
@@ -829,7 +829,7 @@ const _PGRP0 = ProcessGroup([])
 const _PGRP1 = ProcessGroup([])
 
 function PGRP(;role= :default)
-    if role == :manager 
+    if role == :master 
 #        @info "$(role) / PGRP1 !"
         return _PGRP1
     elseif role == :worker 
@@ -838,13 +838,13 @@ function PGRP(;role= :default)
 #    elseif role == :default && _PGRP0.level == 0
     elseif role == :default && myrole() == :master
 #        @info "$(role) / PGRP1 !"
-        return _PGRP1 # as :manager
+        return _PGRP1 # as :master
 #    elseif role == :default && _PGRP0.level > 0
     elseif role == :default && myrole() == :worker
 #        @info "$(role) / PGRP0 !"
         return _PGRP0 # as :worker
     else
-        return _PGRP1 # as :manager
+        return _PGRP1 # as :master
        # throw("unexpected use of role = $role (PGRP) - $(myrole())")
     end
 end
@@ -862,7 +862,7 @@ end
 
 isclusterlazy(; role= :default) = something(PGRP(role = role).lazy, false)
 
-get_bind_addr(pid::Integer) = get_bind_addr(worker_from_id(pid; role = :manager))  # always called as manager 
+get_bind_addr(pid::Integer) = get_bind_addr(worker_from_id(pid; role = :master))  # always called as manager 
 get_bind_addr(w::LocalProcess) = LPROC.bind_addr                                   # always called as manager  
 function get_bind_addr(w::Worker)       
     role = :worker                                           # always called as worker
@@ -888,7 +888,7 @@ function Map_pid_wrkr(;role= :default)
    # @info ("_map_pid_wrkr_0", _map_pid_wrkr_0, "end")
    # @info ("_map_pid_wrkr_1", _map_pid_wrkr_1, "end")
     pg = PGRP(role = role)
-    if role == :manager 
+    if role == :master 
     #    @info "Map_pid_wrkr_1 ", role
         return _map_pid_wrkr_1
     elseif role == :worker 
@@ -896,12 +896,12 @@ function Map_pid_wrkr(;role= :default)
         return _map_pid_wrkr_0
     elseif role == :default && myrole() == :master
     #    @info "Map_pid_wrkr_1 ", role, pg.level
-        return _map_pid_wrkr_1 # as :manager
+        return _map_pid_wrkr_1 # as :master
     elseif role == :default && myrole() == :worker
     #    @info "Map_pid_wrkr_0 ", role, pg.level
         return _map_pid_wrkr_0 # as :worker
     else
-        return _map_pid_wrkr_1 # as :manager
+        return _map_pid_wrkr_1 # as :master
        # throw("unexpected use of role = :default (Map_pid_wrkr)")
    end    
 end
@@ -928,32 +928,32 @@ julia> remotecall_fetch(() -> myid(), 4)
 ```
 """
 function myid(;role= :default) 
-    if role == :manager 
+    if role == :master 
         return LPROC.id1
     elseif role == :worker 
         return LPROC.id0
     elseif role == :default && myrole() == :master
-        return LPROC.id1 # as :manager
+        return LPROC.id1 # as :master
     elseif role == :default && myrole() == :worker
         return LPROC.id0 # as :worker
     else
-        return LPROC.id1 # as :manager
+        return LPROC.id1 # as :master
         #throw("unexpected use of role := default (myid) - $(myrole())")
     end
 
 end
 
 function myid!(id;role= :default) 
-    if role == :manager 
+    if role == :master 
         LPROC.id1 = id
     elseif role == :worker 
         LPROC.id0 = id
     elseif role == :default && myrole() == :master
-        LPROC.id1 = id # as :manager
+        LPROC.id1 = id # as :master
     elseif role == :default && myrole() == :worker
         LPROC.id0 = id # as :worker
     else
-        LPROC.id1 = id # as :manager
+        LPROC.id1 = id # as :master
         #throw("unexpected use of role := default (myid!)")
     end
 
@@ -1075,7 +1075,7 @@ function procs(pid::Integer; role= :default)
             Int[wid(x, role=role) for x in filter(w -> get_bind_addr(w) == ipatpid, all_workers)]
         end
     else
-        remotecall_fetch(pid -> procs(pid, role = :manager), 1; role = role)
+        remotecall_fetch(pid -> procs(pid, role = :master), 1; role = role)
     end
 end
 
@@ -1140,7 +1140,7 @@ julia> workers()
  6
 ```
 """
-function rmprocs(pids...; role = :default, waitfor=typemax(Int))    # supposed to be called always as :manager
+function rmprocs(pids...; role = :default, waitfor=typemax(Int))    # supposed to be called always as :master
 #    cluster_mgmt_from_master_check()
 
     pids = vcat(pids...)
@@ -1270,13 +1270,13 @@ function deregister_worker(pg, pid; role= :default)
             end
         end
 
-        if myid(role=role) == 1 && #=role === :manager &&=# isdefined(w, :config)
+        if myid(role=role) == 1 && #=role === :master &&=# isdefined(w, :config)
             # Notify the cluster manager of this workers death
             manage(w.manager, wid(w, role=role), w.config, :deregister)
             if pg.topology !== :all_to_all || isclusterlazy(role = role)
                 for rpid in workers(role=role)
                     try
-                        remote_do((pid,role) ->  deregister_worker(pid, role=role), rpid, pid, rpid == 1 ? :manager : :worker; role = role)
+                        remote_do((pid,role) ->  deregister_worker(pid, role=role), rpid, pid, rpid == 1 ? :master : :worker; role = role)
                     catch
                     end
                 end
@@ -1312,11 +1312,11 @@ end
 
 
 function interrupt(pid::Integer)  
-    @assert myid(role = :manager) == 1
-    map_pid_wrkr = Map_pid_wrkr(role = :manager)
+    @assert myid(role = :master) == 1
+    map_pid_wrkr = Map_pid_wrkr(role = :master)
     w = map_pid_wrkr[pid]
     if isa(w, Worker)
-        manage(w.manager, wid(w, role=:manager), w.config, :interrupt)
+        manage(w.manager, wid(w, role=:master), w.config, :interrupt)
     end
     return
 end
@@ -1335,8 +1335,8 @@ interrupt(pids::Integer...) = interrupt([pids...])
 Interrupt the current executing task on the specified workers. This is equivalent to
 pressing Ctrl-C on the local machine. If no arguments are given, all workers are interrupted.
 """
-function interrupt(pids::AbstractVector=workers(role = :manager))
-    @assert myid(role = :manager) == 1
+function interrupt(pids::AbstractVector=workers(role = :master))
+    @assert myid(role = :master) == 1
     @sync begin
         for pid in pids
             @async interrupt(pid)
@@ -1349,7 +1349,7 @@ wp_bind_addr(p) = p.config.bind_addr
 
 function check_same_host(pids; role= :default)
     if myid(role = role) != 1
-        return remotecall_fetch(pids -> check_same_host(pids, role = :manager), 1, pids; role = role)
+        return remotecall_fetch(pids -> check_same_host(pids, role = :master), 1, pids; role = role)
     else
         # We checkfirst if all test pids have been started using the local manager,
         # else we check for the same bind_to addr. This handles the special case
@@ -1417,7 +1417,7 @@ let inited = false
         if !inited
             inited = true
             push!(Base.package_callbacks, _require_callback)
-            atexit(() -> terminate_all_workers(role = :manager))                           # TO CHECK (role argument ???)
+            atexit(() -> terminate_all_workers(role = :master))                           # TO CHECK (role argument ???)
             init_bind_addr()
             cluster_cookie(randstring(HDR_COOKIE_LEN))
         end
@@ -1426,7 +1426,7 @@ let inited = false
 end
 
 function init_parallel()
-    start_gc_msgs_task(role = :manager)   # TO CHECK
+    start_gc_msgs_task(role = :master)   # TO CHECK
     start_gc_msgs_task(role = :worker)    # TO CHECK
 
     # start in "head node" mode, if worker, will override later.
@@ -1434,9 +1434,9 @@ function init_parallel()
     global LPROC
     LPROC.id0 = 0
     LPROC.id1 = 1
-    @assert isempty(PGRP(role = :manager).workers)    # TO CHECK
+    @assert isempty(PGRP(role = :master).workers)    # TO CHECK
     @assert isempty(PGRP(role = :worker).workers)     # TO CHECK
-    register_worker(LPROC; role = :manager)           # TO CHECK
+    register_worker(LPROC; role = :master)           # TO CHECK
     register_worker(LPROC; role = :worker)            # TO CHECK
 end
 

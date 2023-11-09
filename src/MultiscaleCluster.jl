@@ -72,15 +72,15 @@ export
     check_same_host
 
 function _require_callback(mod::Base.PkgId)
-    if Base.toplevel_load[] && nprocs(role=:manager) > 1
+    if Base.toplevel_load[] && nprocs(role=:master) > 1
         # broadcast top-level (e.g. from Main) import/using from node 1 (only)
-        @sync for p in procs(role = :manager)
+        @sync for p in procs(role = :master)
             #@info "require callback", p
             p == 1 && continue
             # Extensions are already loaded on workers by their triggers being loaded
             # so no need to fire the callback upon extension being loaded on master.
             Base.loading_extension && continue
-            @async_unwrap remotecall_wait(p; role = :manager) do
+            @async_unwrap remotecall_wait(p; role = :master) do
                 Base.require(mod)
                 nothing
             end

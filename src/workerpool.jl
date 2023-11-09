@@ -138,7 +138,7 @@ for (func, rt) = ((:length, Int), (:isready, Bool), (:workers, Vector{Int}), (:n
     @eval begin
         function ($func)(pool::WorkerPool; role= :default)
             if pool.ref.where != myid(role = role)
-                return remotecall_fetch((ref, role)->(($func_local)(fetch(ref; role=role).value; role = role)), pool.ref.where, pool.ref, pool.ref.where == 1 ? :manager : :worker; role = role)::$rt
+                return remotecall_fetch((ref, role)->(($func_local)(fetch(ref; role=role).value; role = role)), pool.ref.where, pool.ref, pool.ref.where == 1 ? :master : :worker; role = role)::$rt
             else
                 return ($func_local)(pool; role = role)
             end
@@ -154,7 +154,7 @@ for func = (:push!, :put!)
     @eval begin
         function ($func)(pool::WorkerPool, w::Int; role= :default)
             if pool.ref.where != myid(role = role)
-                return remotecall_fetch((ref, w, role)->(($func_local)(fetch(ref; role = role).value, w; role = role)), pool.ref.where, pool.ref, w, pool.ref.where == 1 ? :manager : :worker; role = role)
+                return remotecall_fetch((ref, w, role)->(($func_local)(fetch(ref; role = role).value, w; role = role)), pool.ref.where, pool.ref, w, pool.ref.where == 1 ? :master : :worker; role = role)
             else
                 return ($func_local)(pool, w; role = role)
             end
@@ -268,7 +268,7 @@ function default_worker_pool(;role=:default)
         if myid(role=role) == 1
             _default_worker_pool[] = WorkerPool(role = role)
         else
-            _default_worker_pool[] = remotecall_fetch(role->default_worker_pool(role = role), 1, :manager; role=role)
+            _default_worker_pool[] = remotecall_fetch(role->default_worker_pool(role = role), 1, :master; role=role)
         end
     end
     return _default_worker_pool[]
