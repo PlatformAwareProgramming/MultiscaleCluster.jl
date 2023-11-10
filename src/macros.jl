@@ -39,17 +39,38 @@ julia> fetch(f)
 !!! compat "Julia 1.3"
     As of Julia 1.3 this macro is deprecated. Use `@spawnat :any` instead.
 """
-macro spawn(expr)
+
+
+#macro spawn(expr, role = :(:default))
+
+function check_args_2(args...)
+    na = length(args)
+    if na==1
+        role = :(role = :default)
+        expr = args[1]
+    elseif na==2 
+        role = args[1]
+        expr = args[2]
+    else
+        throw(ArgumentError("wrong number of arguments to spawn"))
+    end
+    return role, expr
+end
+
+macro spawn(args...)
+    rolearg, expr = check_args_2(args...)
+
     thunk = esc(:(()->($expr)))
     var = esc(Base.sync_varname)
     quote
-        local ref = spawn_somewhere($thunk)
+        local ref = spawn_somewhere($thunk; $(esc(rolearg)))
         if $(Expr(:islocal, var))
             put!($var, ref)
         end
         ref
     end
 end
+
 
 """
     @spawnat p expr
@@ -79,14 +100,35 @@ julia> fetch(f)
 !!! compat "Julia 1.3"
     The `:any` argument is available as of Julia 1.3.
 """
-macro spawnat(p, expr)
-    thunk = esc(:(()->($expr)))
-    var = esc(Base.sync_varname)
-    if p === QuoteNode(:any)
-        spawncall = :(spawn_somewhere($thunk))
+
+function check_args_3a(args...)
+    na = length(args)
+    if na==2
+        role = :(role = :default)
+        p = args[1]
+        expr = args[2]
+    elseif na==3 
+        role = args[1]
+        p = args[2]
+        expr = args[3]
     else
-        spawncall = :(spawnat($(esc(p)), $thunk))
+        throw(ArgumentError("wrong number of arguments to spawnat"))
     end
+    return role, p, expr
+end
+
+macro spawnat(args...)
+   rolearg, p, expr = check_args_3a(args...)
+
+    @info rolearg, typeof(rolearg)
+
+   thunk = esc(:(()->($expr)))
+   var = esc(Base.sync_varname)
+   if p === QuoteNode(:any)
+       spawncall = :(spawn_somewhere($thunk; $(esc(rolearg))))
+   else
+       spawncall = :(spawnat($(esc(p)), $thunk; $(esc(rolearg))))
+   end
     quote
         local ref = $spawncall
         if $(Expr(:islocal, var))
@@ -95,6 +137,7 @@ macro spawnat(p, expr)
         ref
     end
 end
+
 
 """
     @fetch expr
@@ -119,9 +162,13 @@ julia> @fetch myid()
 2
 ```
 """
-macro fetch(expr)
+
+macro fetch(args...)
+
+    rolearg, expr = check_args_2(args...)
+
     thunk = esc(:(()->($expr)))
-    :(remotecall_fetch($thunk, nextproc()))
+    :(remotecall_fetch($thunk, nextproc(); $(esc(rolearg))))
 end
 
 """
@@ -141,9 +188,12 @@ julia> @fetchfrom 4 myid()
 4
 ```
 """
-macro fetchfrom(p, expr)
+
+
+macro fetchfrom(args...)
+    rolearg, p, expr = check_args_3a(args...)
     thunk = esc(:(()->($expr)))
-    :(remotecall_fetch($thunk, $(esc(p))))
+    :(remotecall_fetch($thunk, $(esc(p)); $(esc(rolearg))))
 end
 
 # extract a list of modules to import from an expression
@@ -189,20 +239,54 @@ Similar to calling `remotecall_eval(Main, procs, expr)`, but with two extra feat
       packages are precompiled.
     - The current source file path used by `include` is propagated to other processes.
 """
-macro everywhere(ex)
-    procs = GlobalRef(@__MODULE__, :procs)
-    return esc(:($(MultiscaleCluster).@everywhere $procs(role = :master) $ex))
+
+function check_args_3b(args...)
+
+    na = length(args)
+    if na==1
+        rolearg = :(role = :default)
+        reducer = nothing
+        loop = args[1]
+    elseif na==2
+        if isa(args[1], Expr) && args[1].head == :(=) && args[1].args[1] === :role 
+            rolearg = args[1]
+            reducer = nothing
+            loop = args[2]
+        else
+            rolearg = :(role = :default)
+            reducer = args[1]
+            loop = args[2]
+        end
+    elseif na==3
+        rolearg = args[1]
+        reducer = args[2]
+        loop = args[3]
+    else
+        throw(ArgumentError("wrong number of arguments to @distributed"))
+    end
+
+    return rolearg, reducer, loop
 end
 
-macro everywhere(procs, ex)
-    imps = extract_imports(ex)
-    return quote
-        $(isempty(imps) ? nothing : Expr(:toplevel, imps...)) # run imports locally first
-        let ex = Expr(:toplevel, :(task_local_storage()[:SOURCE_PATH] = $(get(task_local_storage(), :SOURCE_PATH, nothing))), $(esc(Expr(:quote, ex)))),
-            procs = $(esc(procs))
-            remotecall_eval(Main, procs, ex; role = :master)
+macro everywhere(args...)
+
+    rolearg, procs, ex = check_args_3b(args...)
+
+    if isnothing(procs)
+        procs = GlobalRef(@__MODULE__, :procs)
+        return esc(:($(MultiscaleCluster).@everywhere $rolearg $procs(;$rolearg) $ex))
+    else
+        imps = extract_imports(ex)
+        return quote
+            $(isempty(imps) ? nothing : Expr(:toplevel, imps...)) # run imports locally first
+            let ex = Expr(:toplevel, :(task_local_storage()[:SOURCE_PATH] = $(get(task_local_storage(), :SOURCE_PATH, nothing))), $(esc(Expr(:quote, ex)))),
+                procs = $(esc(procs))
+                remotecall_eval(Main, procs, ex; $(esc(rolearg)))
+            end
         end
+          
     end
+
 end
 
 """
@@ -261,22 +345,22 @@ function splitrange(firstIndex::Int, lastIndex::Int, np::Int)
     return chunks
 end
 
-function preduce(reducer, f, R; role= :default)
-    chunks = splitrange(Int(firstindex(R)), Int(lastindex(R)), nworkers(role = role))
-    all_w = workers(role = role)[1:length(chunks)]
+function preduce(reducer, f, R; role = :default)
+    chunks = splitrange(Int(firstindex(R)), Int(lastindex(R)), nworkers(role=role))
+    all_w = workers(role=role)[1:length(chunks)]
 
     w_exec = Task[]
     for (idx,pid) in enumerate(all_w)
-        t = Task(()->remotecall_fetch(f, pid, reducer, R, first(chunks[idx]), last(chunks[idx]); role = role))
+        t = Task(()->remotecall_fetch(f, pid, reducer, R, first(chunks[idx]), last(chunks[idx]), role=role))
         schedule(t)
         push!(w_exec, t)
     end
     reduce(reducer, Any[fetch(t) for t in w_exec])
 end
 
-function pfor(f, R)
-    t = @async @sync for c in splitrange(Int(firstindex(R)), Int(lastindex(R)), nworkers())
-        @spawnat :any f(R, first(c), last(c))
+function pfor(f, R; role = :default)
+    t = @async @sync for c in splitrange(Int(firstindex(R)), Int(lastindex(R)), nworkers(role=role))
+        @spawnat role=role :any f(R, first(c), last(c))
     end
     errormonitor(t)
 end
@@ -328,15 +412,9 @@ completion. To wait for completion, prefix the call with [`@sync`](@ref), like :
     end
 """
 macro distributed(args...)
-    na = length(args)
-    if na==1
-        loop = args[1]
-    elseif na==2
-        reducer = args[1]
-        loop = args[2]
-    else
-        throw(ArgumentError("wrong number of arguments to @distributed"))
-    end
+    
+    rolearg, reducer, loop = check_args_3b(args...)
+    
     if !isa(loop,Expr) || loop.head !== :for
         error("malformed @distributed loop")
     end
@@ -346,16 +424,16 @@ macro distributed(args...)
     if Meta.isexpr(body, :block) && body.args[end] isa LineNumberNode
         resize!(body.args, length(body.args) - 1)
     end
-    if na==1
+    if isnothing(reducer)
         syncvar = esc(Base.sync_varname)
         return quote
-            local ref = pfor($(make_pfor_body(var, body)), $(esc(r)))
+            local ref = pfor($(make_pfor_body(var, body)), $(esc(r)); $(esc(rolearg)))
             if $(Expr(:islocal, syncvar))
                 put!($syncvar, ref)
             end
             ref
         end
     else
-        return :(preduce($(esc(reducer)), $(make_preduce_body(var, body)), $(esc(r)))) # TO CHECK (role ?)
+        return :(preduce($(esc(reducer)), $(make_preduce_body(var, body)), $(esc(r)); $(esc(rolearg)))) # TO CHECK (role ?)
     end
 end
